@@ -23,10 +23,10 @@ An unofficial Discord bot for finding CS2 skin deals on CSFloat. It searches auc
 ## Example output
 
 ```text
-**+18.2%** [AK-47 | Neon Revolution (Minimal Wear)](https://csfloat.com/item/12345)
+**+18.1%** [AK-47 | Neon Revolution (Minimal Wear)](https://csfloat.com/item/12345)
 bid $14.90 · ref $18.20 · 2h 15m · float 0.1234
 
-**+12.5%** [USP-S | Royal Blue](https://csfloat.com/item/67890)
+**+12.0%** [USP-S | Royal Blue](https://csfloat.com/item/67890)
 price $9.50 · ref $10.80 · float 0.0345 · 18m ago
 ```
 
