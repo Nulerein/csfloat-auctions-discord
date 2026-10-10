@@ -73,9 +73,12 @@ def parse_float_setting(
 
 def parse_optional_discord_id(name, value):
     """Return an optional Discord snowflake string, rejecting non-numeric IDs."""
-    if value is None or not value.strip():
+    if value is None:
         return None
-    if not value.isdigit():
+    value = value.strip()
+    if not value:
+        return None
+    if not value.isascii() or not value.isdigit():
         raise ValueError(f"{name} must contain only digits.")
     return value
 

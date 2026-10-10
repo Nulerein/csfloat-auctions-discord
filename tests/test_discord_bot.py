@@ -82,10 +82,18 @@ class ConfigurationValidationTests(unittest.TestCase):
             discord_bot.parse_optional_discord_id("GUILD_ID", "123456789"),
             "123456789",
         )
+        self.assertEqual(
+            discord_bot.parse_optional_discord_id("GUILD_ID", " 123456789 "),
+            "123456789",
+        )
 
     def test_optional_discord_id_rejects_non_numeric_value(self):
-        with self.assertRaisesRegex(ValueError, "GUILD_ID.*only digits"):
-            discord_bot.parse_optional_discord_id("GUILD_ID", "abc123")
+        for value in ("abc123", "²", "١٢٣"):
+            with (
+                self.subTest(value=value),
+                self.assertRaisesRegex(ValueError, "GUILD_ID.*only digits"),
+            ):
+                discord_bot.parse_optional_discord_id("GUILD_ID", value)
 
 
 class ApiPayloadTests(unittest.TestCase):
