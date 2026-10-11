@@ -72,7 +72,7 @@ Fill in `.env`:
 | `CSFLOAT_API_KEY` | No, but recommended | CSFloat API key. |
 | `GUILD_ID` | No | Discord server ID. When set, commands are synced to that server immediately. |
 | `ALERT_CHANNEL_ID` | No | Channel ID for automatic alerts. If empty, the bot only responds to commands. |
-| `ALERT_INTERVAL_MIN` | No | How often to check auctions, in minutes. Default: `5`. |
+| `ALERT_INTERVAL_MIN` | No | How often to check auctions, in minutes (at least `1`). Default: `5`. |
 | `ALERT_MAX_PRICE` | No | Maximum price for alerts, in USD. Default: `30`. |
 | `ALERT_HOURS` | No | Alert for auctions ending within this many hours. Default: `6`. |
 | `ALERT_MIN_DISCOUNT` | No | Minimum discount for alerts, in percent. Default: `15`. |

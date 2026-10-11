@@ -1,4 +1,7 @@
 import json
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -10,6 +13,7 @@ import discord_bot
 
 UTC = timezone.utc
 NOW = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class FrozenDateTime(datetime):
@@ -434,6 +438,39 @@ class SlashCommandTests(unittest.IsolatedAsyncioTestCase):
         interaction.response.defer.assert_awaited_once_with(thinking=True)
         interaction.followup.send.assert_awaited_once()
         self.assertIn("embed", interaction.followup.send.await_args.kwargs)
+
+
+class ConfigurationImportTests(unittest.TestCase):
+    """Import the module for real: an invalid .env value must stop the bot at startup."""
+
+    def import_with_env(self, **overrides):
+        env = {
+            **os.environ,
+            "PYTHONIOENCODING": "utf-8",
+            "GUILD_ID": "",
+            "ALERT_CHANNEL_ID": "",
+            "ALERT_INTERVAL_MIN": "5",
+            "ALERT_MAX_PRICE": "30",
+            "ALERT_HOURS": "6",
+            "ALERT_MIN_DISCOUNT": "15",
+        }
+        env.update(overrides)
+        return subprocess.run(
+            [sys.executable, "-c", "import discord_bot"],
+            cwd=ROOT, env=env, capture_output=True, text=True, encoding="utf-8",
+            timeout=60, check=False,
+        )
+
+    def test_one_minute_alert_interval_is_accepted(self):
+        result = self.import_with_env(ALERT_INTERVAL_MIN="1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_alert_interval_below_one_minute_is_rejected(self):
+        for value in ("0.5", "0.0001", "0"):
+            with self.subTest(value=value):
+                result = self.import_with_env(ALERT_INTERVAL_MIN=value)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("ALERT_INTERVAL_MIN", result.stderr)
 
 
 if __name__ == "__main__":

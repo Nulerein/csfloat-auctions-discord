@@ -83,6 +83,8 @@ def parse_optional_discord_id(name, value):
     return value
 
 
+MIN_ALERT_INTERVAL_MIN = 1  # Never poll CSFloat more often than once a minute.
+
 try:
     GUILD_ID = parse_optional_discord_id("GUILD_ID", os.getenv("GUILD_ID"))
     ALERT_CHANNEL_ID = parse_optional_discord_id(
@@ -90,7 +92,7 @@ try:
     )
     ALERT_INTERVAL_MIN = parse_float_setting(
         "ALERT_INTERVAL_MIN", os.getenv("ALERT_INTERVAL_MIN"), 5,
-        minimum=0, minimum_exclusive=True,
+        minimum=MIN_ALERT_INTERVAL_MIN,
     )
     ALERT_MAX_PRICE = parse_float_setting(
         "ALERT_MAX_PRICE", os.getenv("ALERT_MAX_PRICE"), 30,
