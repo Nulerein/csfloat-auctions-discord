@@ -31,7 +31,7 @@ jobs:
           python -m pip install -r requirements-dev.txt
 
       - name: Lint
-        run: python -m ruff check .
+        run: python -m ruff check --target-version py310 .
 
       - name: Run tests
         run: python -m unittest discover -s tests -v
