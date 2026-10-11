@@ -100,8 +100,8 @@ Set command options directly in Discord.
 | Option | Default | Description |
 | --- | --- | --- |
 | `max_price` | `30` | Maximum price in USD (`1` to `5000`). |
-| `hours` | `12` | Show auctions ending within this many hours (`0.1` to `168`). |
-| `top` | `8` | Maximum number of results (`1` to `15`). |
+| `hours` | `12` | Show auctions ending within this many hours (`0.1` to `720`, up to 30 days). |
+| `top` | `30` | Maximum number of results (`1` to `30`). |
 | `min_discount` | `0` | Minimum discount in percent; negative values are allowed. |
 
 ### `/deals`
@@ -111,7 +111,7 @@ Set command options directly in Discord.
 | `max_price` | `30` | Maximum price in USD (`1` to `5000`). |
 | `min_price` | `1` | Minimum price in USD (`0` to `5000`). |
 | `min_discount` | `10` | Minimum discount from the reference price, in percent. |
-| `top` | `8` | Maximum number of results (`1` to `15`). |
+| `top` | `30` | Maximum number of results (`1` to `30`). |
 | `sort` | `Highest discount` | Choose between the highest discounts and newest listings. |
 | `min_sales` | `20` | Minimum number of sales used for the reference price (`0` to `1000`); `0` disables this filter. |
 

@@ -414,8 +414,8 @@ client = RadarBot()
 async def auctions(
     interaction: discord.Interaction,
     max_price: app_commands.Range[float, 1.0, 5000.0] = 30.0,
-    hours: app_commands.Range[float, 0.1, 168.0] = 12.0,
-    top: app_commands.Range[int, 1, 15] = 8,
+    hours: app_commands.Range[float, 0.1, 720.0] = 12.0,
+    top: app_commands.Range[int, 1, 30] = 30,
     min_discount: float = 0.0,
 ):
     await interaction.response.defer(thinking=True)  # The CSFloat request may take a few seconds.
@@ -452,7 +452,7 @@ async def deals(
     max_price: app_commands.Range[float, 1.0, 5000.0] = 30.0,
     min_price: app_commands.Range[float, 0.0, 5000.0] = 1.0,
     min_discount: float = 10.0,
-    top: app_commands.Range[int, 1, 15] = 8,
+    top: app_commands.Range[int, 1, 30] = 30,
     sort: app_commands.Choice[str] | None = None,
     min_sales: app_commands.Range[int, 0, 1000] = 20,
 ):
