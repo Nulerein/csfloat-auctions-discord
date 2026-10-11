@@ -4,14 +4,13 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 import discord_bot
 
-UTC = timezone.utc
 NOW = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
 ROOT = Path(__file__).resolve().parents[1]
 

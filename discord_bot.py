@@ -20,7 +20,7 @@ import os
 import re
 import tempfile
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import discord
@@ -128,13 +128,13 @@ def parse_time(s):
         dt = datetime.fromisoformat(s)
     except ValueError:
         return None
-    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
 
 def load_seen(path=SEEN_AUCTIONS_FILE, now=None):
     """Load valid, unexpired notified auction IDs from the local JSON state file."""
     path = Path(path)
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     try:
         with path.open(encoding="utf-8") as state_file:
             payload = json.load(state_file)
@@ -245,7 +245,7 @@ def find_auctions(max_price, hours, pages=4):
         "max_price": round(max_price * 100),  # The API expects cents.
         "limit": 50,
     }
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     deadline = now + timedelta(hours=hours)
     rows, cursor = [], None
     for _ in range(pages):
@@ -329,13 +329,13 @@ def find_deals(max_price, min_price, sort_by, min_sales, pages):
 # ---------- Message formatting ----------
 
 def fmt_left(exp):
-    secs = max(int((exp - datetime.now(timezone.utc)).total_seconds()), 0)
+    secs = max(int((exp - datetime.now(UTC)).total_seconds()), 0)
     h, m = divmod(secs // 60, 60)
     return f"{h}h {m:02d}m"
 
 
 def fmt_age(created):
-    secs = max(int((datetime.now(timezone.utc) - created).total_seconds()), 0)
+    secs = max(int((datetime.now(UTC) - created).total_seconds()), 0)
     if secs < 60:
         return "just now"
     if secs < 3600:
@@ -487,7 +487,7 @@ async def alert_loop():
         channel_id = int(ALERT_CHANNEL_ID)
         channel = client.get_channel(channel_id) or await client.fetch_channel(channel_id)
         rows = await asyncio.get_running_loop().run_in_executor(None, find_auctions, ALERT_MAX_PRICE, ALERT_HOURS)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         client.seen = {i: e for i, e in client.seen.items() if e > now}  # Drop expired auctions.
         new = [r for r in rows if r["disc"] >= ALERT_MIN_DISCOUNT and r["id"] not in client.seen][:10]
         if new:

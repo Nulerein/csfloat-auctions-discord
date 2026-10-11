@@ -3,7 +3,7 @@
 <div align="center">
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 [![Discord.py](https://img.shields.io/badge/discord.py-2.x-5865F2.svg)](https://discordpy.readthedocs.io/)
 
 </div>
@@ -34,7 +34,7 @@ The bot posts matching auctions and buy-now listings directly in Discord.
 
 ## Requirements
 
-- Python 3.10 or newer
+- Python 3.11 or newer
 - A Discord application and bot token
 - A CSFloat API key (recommended for reliable requests)
 
