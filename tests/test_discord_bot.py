@@ -472,5 +472,158 @@ class ConfigurationImportTests(unittest.TestCase):
                 self.assertIn("ALERT_INTERVAL_MIN", result.stderr)
 
 
+def make_deal_row(index, steam=False):
+    return {
+        "kind": "deal", "id": f"deal-{index}", "bid": 950 + index, "ref": 1080, "steam": steam,
+        "disc": 12.0 - index * 0.1, "float": 0.0712, "name": "★ Butterfly Knife | Doppler (Factory New)",
+        "offer": 900, "created": None,
+    }
+
+
+def make_auction_row(index):
+    return {
+        "kind": "auction", "id": f"auction-{index}", "bid": 1490 + index, "ref": 1820, "steam": False,
+        "disc": 20.0 - index * 0.3, "exp": NOW + timedelta(hours=1, minutes=index), "float": 0.1234,
+        "name": "★ Butterfly Knife | Doppler (Factory New)",
+    }
+
+
+class ResultSplittingTests(unittest.TestCase):
+    def test_long_results_are_split_without_losing_or_reordering_rows(self):
+        rows = [make_deal_row(i) for i in range(30)]
+        embeds = discord_bot.build_embeds(rows, "Deals")
+
+        self.assertGreater(len(embeds), 1)
+        for number, embed in enumerate(embeds, 1):
+            self.assertEqual(embed.title, f"Deals ({number}/{len(embeds)})")
+            self.assertLessEqual(len(embed.description), discord_bot.EMBED_TEXT_LIMIT)
+        text = "\n".join(embed.description for embed in embeds)
+        positions = []
+        for i in range(30):
+            self.assertEqual(text.count(f"/item/deal-{i})"), 1, f"row {i}")
+            positions.append(text.index(f"/item/deal-{i})"))
+        self.assertEqual(positions, sorted(positions))
+
+    def test_short_results_stay_in_one_embed_with_the_plain_title(self):
+        embeds = discord_bot.build_embeds([make_deal_row(0), make_deal_row(1)], "Deals")
+        self.assertEqual([embed.title for embed in embeds], ["Deals"])
+
+    def test_empty_results_produce_no_embeds(self):
+        self.assertEqual(discord_bot.build_embeds([], "Deals"), [])
+
+    def test_steam_note_appears_only_on_the_embed_that_needs_it(self):
+        rows = [make_deal_row(i, steam=(i == 29)) for i in range(30)]
+        embeds = discord_bot.build_embeds(rows, "Deals")
+        self.assertIsNone(embeds[0].footer.text)
+        self.assertEqual(embeds[-1].footer.text, discord_bot.STEAM_FOOTER)
+
+    def test_note_goes_to_the_last_embed_only_and_joins_the_steam_note(self):
+        rows = [make_deal_row(i, steam=(i == 29)) for i in range(30)]
+        embeds = discord_bot.build_embeds(rows, "Deals", note="NOTE")
+        self.assertIsNone(embeds[0].footer.text)
+        self.assertEqual(embeds[-1].footer.text, f"{discord_bot.STEAM_FOOTER}\nNOTE")
+
+
+class AuctionScanLimitTests(unittest.TestCase):
+    def lot(self, hours_ahead):
+        return {
+            "id": f"lot-{hours_ahead}",
+            "state": "listed",
+            "price": 800,
+            "auction_details": {"expires_at": (NOW + timedelta(hours=hours_ahead)).isoformat()},
+            "reference": {"predicted_price": 1000},
+        }
+
+    def scan(self, pages, *responses, hours=24):
+        with (
+            patch.object(discord_bot, "datetime", FrozenDateTime),
+            patch.object(discord_bot, "make_session"),
+            patch.object(discord_bot, "api_get", side_effect=list(responses)),
+        ):
+            return discord_bot.find_auctions(30, hours, pages=pages)
+
+    def test_flag_is_set_when_the_page_limit_stops_the_scan(self):
+        result = self.scan(
+            2, {"data": [self.lot(1)], "cursor": "c1"}, {"data": [self.lot(2)], "cursor": "c2"})
+        self.assertEqual(len(result), 2)
+        self.assertTrue(result.page_limit_hit)
+
+    def test_flag_is_not_set_when_all_results_were_read(self):
+        result = self.scan(
+            2, {"data": [self.lot(1)], "cursor": "c1"}, {"data": [self.lot(2)], "cursor": None})
+        self.assertFalse(result.page_limit_hit)
+
+    def test_flag_is_not_set_when_the_end_of_the_window_was_reached(self):
+        result = self.scan(2, {"data": [self.lot(1), self.lot(30)], "cursor": "c1"})
+        self.assertEqual([row["id"] for row in result], ["lot-1"])
+        self.assertFalse(result.page_limit_hit)
+
+    def test_auction_pages_grow_with_the_window(self):
+        self.assertEqual(discord_bot.auction_pages(12), 4)
+        self.assertEqual(discord_bot.auction_pages(24), 4)
+        self.assertEqual(discord_bot.auction_pages(24.1), 10)
+        self.assertEqual(discord_bot.auction_pages(720), 10)
+
+
+class LongResultCommandTests(unittest.IsolatedAsyncioTestCase):
+    def make_interaction(self):
+        return SimpleNamespace(
+            response=SimpleNamespace(defer=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+
+    async def run_auctions(self, found, **options):
+        interaction = self.make_interaction()
+        loop = SimpleNamespace(run_in_executor=AsyncMock(return_value=found))
+        with patch.object(discord_bot.asyncio, "get_running_loop", return_value=loop):
+            await discord_bot.auctions.callback(interaction, **options)
+        return interaction, loop
+
+    def sent_embeds(self, interaction):
+        return [call.kwargs["embed"] for call in interaction.followup.send.await_args_list]
+
+    async def test_auctions_sends_every_requested_listing_in_several_messages(self):
+        found = discord_bot.SearchResult([make_auction_row(i) for i in range(30)], page_limit_hit=True)
+        interaction, loop = await self.run_auctions(found, hours=48.0, top=30)
+
+        loop.run_in_executor.assert_awaited_once_with(None, discord_bot.find_auctions, 30.0, 48.0, 10)
+        embeds = self.sent_embeds(interaction)
+        self.assertGreater(len(embeds), 1)
+        self.assertEqual(sum(embed.description.count("/item/auction-") for embed in embeds), 30)
+        self.assertIsNone(embeds[0].footer.text)
+        self.assertIn("500 auctions ending soonest", embeds[-1].footer.text)
+
+    async def test_auctions_uses_fewer_pages_for_the_default_window(self):
+        _, loop = await self.run_auctions(discord_bot.SearchResult([make_auction_row(0)]))
+        loop.run_in_executor.assert_awaited_once_with(None, discord_bot.find_auctions, 30.0, 12.0, 4)
+
+    async def test_auctions_has_no_scan_note_when_everything_was_scanned(self):
+        interaction, _ = await self.run_auctions(discord_bot.SearchResult([make_auction_row(0)]))
+        (embed,) = self.sent_embeds(interaction)
+        self.assertIsNone(embed.footer.text)
+
+    async def test_auctions_accepts_a_plain_list_from_the_search(self):
+        interaction, _ = await self.run_auctions([make_auction_row(0)])
+        (embed,) = self.sent_embeds(interaction)
+        self.assertIsNone(embed.footer.text)
+
+    async def test_auctions_empty_result_mentions_an_incomplete_scan(self):
+        interaction, _ = await self.run_auctions(discord_bot.SearchResult([], page_limit_hit=True))
+        message = interaction.followup.send.await_args.args[0]
+        self.assertIn("No listings found", message)
+        self.assertIn("200 auctions ending soonest", message)
+
+    async def test_deals_splits_long_results_into_several_messages(self):
+        interaction = self.make_interaction()
+        rows = [make_deal_row(i) for i in range(30)]
+        loop = SimpleNamespace(run_in_executor=AsyncMock(return_value=rows))
+        with patch.object(discord_bot.asyncio, "get_running_loop", return_value=loop):
+            await discord_bot.deals.callback(interaction, top=30, min_discount=0.0)
+
+        embeds = self.sent_embeds(interaction)
+        self.assertGreater(len(embeds), 1)
+        self.assertEqual(sum(embed.description.count("/item/deal-") for embed in embeds), 30)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -233,9 +233,36 @@ def ref_price(lot):
     return None, None
 
 
-def find_auctions(max_price, hours, pages=4):
+AUCTIONS_PER_PAGE = 50
+AUCTION_PAGES_SHORT = 4  # Up to 200 auctions: enough for the default window.
+AUCTION_PAGES_LONG = 10  # Up to 500 auctions: for windows longer than a day.
+AUCTION_LONG_WINDOW_HOURS = 24
+
+
+class SearchResult(list):
+    """Rows found by a search, plus a flag saying whether the page limit cut the scan short."""
+
+    def __init__(self, rows=(), page_limit_hit=False):
+        super().__init__(rows)
+        self.page_limit_hit = page_limit_hit
+
+
+def auction_pages(hours):
+    """Scan more pages for long windows: results are ordered by expiration time, so a long window needs more."""
+    return AUCTION_PAGES_LONG if hours > AUCTION_LONG_WINDOW_HOURS else AUCTION_PAGES_SHORT
+
+
+def scan_limit_note(pages):
+    return (
+        f"Only the {pages * AUCTIONS_PER_PAGE} auctions ending soonest were scanned; there may be unchecked "
+        "auctions within this time window. Narrow hours or max_price to reduce the scan."
+    )
+
+
+def find_auctions(max_price, hours, pages=AUCTION_PAGES_SHORT):
     """Find auctions ending within `hours`, sorted by largest discount first.
 
+    The result's `page_limit_hit` flag is True when more auctions existed than `pages` allowed us to read.
     This blocking function should be called from the bot via run_in_executor.
     """
     session = make_session()
@@ -248,7 +275,8 @@ def find_auctions(max_price, hours, pages=4):
     now = datetime.now(UTC)
     deadline = now + timedelta(hours=hours)
     rows, cursor = [], None
-    for _ in range(pages):
+    page_limit_hit = False
+    for page in range(pages):
         if cursor:
             params["cursor"] = cursor
         batch, cursor = unpack(api_get(session, params))
@@ -277,8 +305,10 @@ def find_auctions(max_price, hours, pages=4):
             })
         if past_window or not cursor:
             break
+        if page == pages - 1:
+            page_limit_hit = True  # More auctions exist, but the page limit stopped the scan.
     rows.sort(key=lambda r: r["disc"], reverse=True)
-    return rows
+    return SearchResult(rows, page_limit_hit)
 
 
 def find_deals(max_price, min_price, sort_by, min_sales, pages):
@@ -361,18 +391,61 @@ def fmt_row(r):
     return f"{head}\n{info}"
 
 
+EMBED_TEXT_LIMIT = 3800  # The embed description limit is 4096 characters.
+STEAM_FOOTER = "* No CSFloat reference; comparison uses Steam price (discount may be overstated)."
+
+
 def build_embed(rows, title):
+    """Build one embed; rows that do not fit are dropped. Use build_embeds() when nothing may be lost."""
     lines, total = [], 0
     for r in rows:
         line = fmt_row(r)
-        if total + len(line) > 3800:  # The embed description limit is 4096 characters.
+        if total + len(line) > EMBED_TEXT_LIMIT:
             break
         lines.append(line)
         total += len(line) + 2
     embed = discord.Embed(title=title, description="\n\n".join(lines), color=0x2B7FFF)
     if any(r["steam"] for r in rows[: len(lines)]):
-        embed.set_footer(text="* No CSFloat reference; comparison uses Steam price (discount may be overstated).")
+        embed.set_footer(text=STEAM_FOOTER)
     return embed
+
+
+def build_embeds(rows, title, note=None):
+    """Split rows into as many embeds as needed, so that no listing is silently dropped.
+
+    `note` (for example a warning about an incomplete scan) goes into the footer of the last embed.
+    """
+    chunks, current, total = [], [], 0
+    for r in rows:
+        line = fmt_row(r)
+        if current and total + len(line) > EMBED_TEXT_LIMIT:
+            chunks.append(current)
+            current, total = [], 0
+        current.append((r, line))
+        total += len(line) + 2
+    if current:
+        chunks.append(current)
+
+    embeds = []
+    for number, chunk in enumerate(chunks, 1):
+        page_title = f"{title} ({number}/{len(chunks)})" if len(chunks) > 1 else title
+        embed = discord.Embed(
+            title=page_title, description="\n\n".join(line for _, line in chunk), color=0x2B7FFF)
+        footer = []
+        if any(r["steam"] for r, _ in chunk):
+            footer.append(STEAM_FOOTER)
+        if note and number == len(chunks):
+            footer.append(note)
+        if footer:
+            embed.set_footer(text="\n".join(footer))
+        embeds.append(embed)
+    return embeds
+
+
+async def send_embeds(interaction, embeds):
+    """Send every embed as its own message: Discord limits the text of all embeds in one message to 6000 characters."""
+    for embed in embeds:
+        await interaction.followup.send(embed=embed)
 
 
 # ---------- Discord bot ----------
@@ -424,19 +497,21 @@ async def auctions(
     min_discount: float = 0.0,
 ):
     await interaction.response.defer(thinking=True)  # The CSFloat request may take a few seconds.
+    pages = auction_pages(hours)
     try:
-        rows = await asyncio.get_running_loop().run_in_executor(None, find_auctions, max_price, hours)
+        found = await asyncio.get_running_loop().run_in_executor(None, find_auctions, max_price, hours, pages)
     except (CSFloatError, requests.RequestException) as e:
         logger.warning("CSFloat request failed for /auctions: %s", e)
         await interaction.followup.send(f"Could not retrieve CSFloat data: {e}")
         return
-    rows = [r for r in rows if r["disc"] >= min_discount][:top]
+    note = scan_limit_note(pages) if getattr(found, "page_limit_hit", False) else None
+    rows = [r for r in found if r["disc"] >= min_discount][:top]
     if not rows:
-        await interaction.followup.send(
-            "No listings found. Try increasing max_price or hours, or lowering min_discount.")
+        message = "No listings found. Try increasing max_price or hours, or lowering min_discount."
+        await interaction.followup.send(f"{message}\n{note}" if note else message)
         return
-    await interaction.followup.send(
-        embed=build_embed(rows, f"Auction listings up to ${max_price:g}, ending within {hours:g}h"))
+    title = f"Auction listings up to ${max_price:g}, ending within {hours:g}h"
+    await send_embeds(interaction, build_embeds(rows, title, note))
 
 
 @client.tree.command(name="deals", description="CSFloat buy-now listings with good discounts")
@@ -477,8 +552,7 @@ async def deals(
             "No listings found. Try increasing max_price or lowering min_discount or min_sales.")
         return
     mode = "highest discounts" if sort_by == "highest_discount" else "newest listings"
-    await interaction.followup.send(
-        embed=build_embed(rows, f"Buy-now listings ${min_price:g}-${max_price:g}, {mode}"))
+    await send_embeds(interaction, build_embeds(rows, f"Buy-now listings ${min_price:g}-${max_price:g}, {mode}"))
 
 
 @tasks.loop(minutes=5)  # The actual interval is configured by ALERT_INTERVAL_MIN.

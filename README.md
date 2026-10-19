@@ -100,8 +100,8 @@ Set command options directly in Discord.
 | Option | Default | Description |
 | --- | --- | --- |
 | `max_price` | `30` | Maximum price in USD (`1` to `5000`). |
-| `hours` | `12` | Show auctions ending within this many hours (`0.1` to `720`, up to 30 days). |
-| `top` | `30` | Maximum number of results (`1` to `30`). |
+| `hours` | `12` | Show auctions ending within this many hours (`0.1` to `720`, up to 30 days). The bot scans the 200 auctions ending soonest, or 500 when `hours` is above 24; if that is not enough, the reply says so. |
+| `top` | `30` | Maximum number of results (`1` to `30`). Long lists are sent as several messages. |
 | `min_discount` | `0` | Minimum discount in percent; negative values are allowed. |
 
 ### `/deals`
@@ -111,7 +111,7 @@ Set command options directly in Discord.
 | `max_price` | `30` | Maximum price in USD (`1` to `5000`). |
 | `min_price` | `1` | Minimum price in USD (`0` to `5000`). |
 | `min_discount` | `10` | Minimum discount from the reference price, in percent. |
-| `top` | `30` | Maximum number of results (`1` to `30`). |
+| `top` | `30` | Maximum number of results (`1` to `30`). Long lists are sent as several messages. |
 | `sort` | `Highest discount` | Choose between the highest discounts and newest listings. |
 | `min_sales` | `20` | Minimum number of sales used for the reference price (`0` to `1000`); `0` disables this filter. |
 
