@@ -1,5 +1,7 @@
 # Never commit secrets.
 .env
+.vscode/
+settings.json
 
 # Python
 __pycache__/
@@ -10,3 +12,5 @@ venv/
 # Local state for auction notifications
 seen_auctions.json
 seen_auctions.json.*.tmp
+seen_manual_auctions.json
+seen_manual_auctions.json.*.tmp

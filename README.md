@@ -81,6 +81,8 @@ Never publish `.env` or share your bot token or API key.
 
 Previously sent alerts are stored in a local `seen_auctions.json` file next to the script. The file is updated automatically and is excluded from Git.
 
+The `/auctions` command separately remembers shown listings for each user in `seen_manual_auctions.json`. Auctions are forgotten after they expire; delete the file to reset this history.
+
 On startup, the bot validates numeric settings and server/channel IDs. Invalid values stop startup with an error that identifies the setting and expected format.
 
 ### Run
@@ -100,7 +102,8 @@ Set command options directly in Discord.
 | Option | Default | Description |
 | --- | --- | --- |
 | `max_price` | `30` | Maximum price in USD (`1` to `5000`). |
-| `hours` | `12` | Show auctions ending within this many hours (`0.1` to `720`, up to 30 days). The bot scans the 200 auctions ending soonest, or 500 when `hours` is above 24; if that is not enough, the reply says so. |
+| `hours` | `12` | Show auctions ending within this many hours (`0.1` to `720`, up to 30 days). |
+| `pages` | `10` | Number of pages to scan (`1` to `50`; 50 auctions per page, up to 2,500). Higher values make more requests to CSFloat and may take longer or trigger rate limits. |
 | `top` | `30` | Maximum number of results (`1` to `30`). Long lists are sent as several messages. |
 | `min_discount` | `0` | Minimum discount in percent; negative values are allowed. |
 

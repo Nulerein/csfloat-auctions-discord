@@ -207,6 +207,18 @@ class SeenAuctionsStateTests(unittest.TestCase):
         self.assertEqual(loaded, {"valid": NOW + timedelta(hours=1)})
         self.assertEqual(len(logs.records), 2)
 
+    def test_manual_seen_state_is_saved_and_loaded_per_user(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "manual_seen.json"
+            state = {
+                "user-1": {"active": NOW + timedelta(hours=1)},
+                "user-2": {"expired": NOW - timedelta(minutes=1)},
+            }
+            discord_bot.save_manual_seen(state, path)
+            loaded = discord_bot.load_manual_seen(path, now=NOW)
+
+        self.assertEqual(loaded, {"user-1": {"active": NOW + timedelta(hours=1)}})
+
 
 class SetupHookTests(unittest.IsolatedAsyncioTestCase):
     async def test_setup_hook_starts_alerts_if_state_file_cannot_be_loaded(self):
@@ -384,8 +396,10 @@ class SlashCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(deals)
         self.assertEqual(
             {parameter.name for parameter in auctions.parameters},
-            {"max_price", "hours", "top", "min_discount"},
+            {"max_price", "hours", "pages", "top", "min_discount"},
         )
+        pages = next(parameter for parameter in auctions.parameters if parameter.name == "pages")
+        self.assertEqual((pages.min_value, pages.max_value, pages.default), (1, 50, 10))
         self.assertEqual(
             {parameter.name for parameter in deals.parameters},
             {"max_price", "min_price", "min_discount", "top", "sort", "min_sales"},
@@ -558,29 +572,33 @@ class AuctionScanLimitTests(unittest.TestCase):
         self.assertEqual([row["id"] for row in result], ["lot-1"])
         self.assertFalse(result.page_limit_hit)
 
-    def test_auction_pages_grow_with_the_window(self):
-        self.assertEqual(discord_bot.auction_pages(12), 4)
-        self.assertEqual(discord_bot.auction_pages(24), 4)
-        self.assertEqual(discord_bot.auction_pages(24.1), 10)
-        self.assertEqual(discord_bot.auction_pages(720), 10)
-
-
 class LongResultCommandTests(unittest.IsolatedAsyncioTestCase):
-    def make_interaction(self):
+    def make_interaction(self, user_id=123):
         return SimpleNamespace(
             response=SimpleNamespace(defer=AsyncMock()),
             followup=SimpleNamespace(send=AsyncMock()),
+            user=SimpleNamespace(id=user_id),
         )
 
-    async def run_auctions(self, found, **options):
-        interaction = self.make_interaction()
+    async def run_auctions(self, found, *, user_id=123, manual_seen=None, **options):
+        interaction = self.make_interaction(user_id)
         loop = SimpleNamespace(run_in_executor=AsyncMock(return_value=found))
-        with patch.object(discord_bot.asyncio, "get_running_loop", return_value=loop):
+        state = manual_seen if manual_seen is not None else {}
+        with (
+            patch.object(discord_bot.client, "manual_seen", state),
+            patch.object(discord_bot, "save_manual_seen"),
+            patch.object(discord_bot, "datetime", FrozenDateTime),
+            patch.object(discord_bot.asyncio, "get_running_loop", return_value=loop),
+        ):
             await discord_bot.auctions.callback(interaction, **options)
         return interaction, loop
 
     def sent_embeds(self, interaction):
-        return [call.kwargs["embed"] for call in interaction.followup.send.await_args_list]
+        return [
+            call.kwargs["embed"]
+            for call in interaction.followup.send.await_args_list
+            if "embed" in call.kwargs
+        ]
 
     async def test_auctions_sends_every_requested_listing_in_several_messages(self):
         found = discord_bot.SearchResult([make_auction_row(i) for i in range(30)], page_limit_hit=True)
@@ -593,9 +611,37 @@ class LongResultCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(embeds[0].footer.text)
         self.assertIn("500 auctions ending soonest", embeds[-1].footer.text)
 
-    async def test_auctions_uses_fewer_pages_for_the_default_window(self):
+    async def test_auctions_scans_500_listings_for_the_default_window(self):
         _, loop = await self.run_auctions(discord_bot.SearchResult([make_auction_row(0)]))
-        loop.run_in_executor.assert_awaited_once_with(None, discord_bot.find_auctions, 30.0, 12.0, 4)
+        loop.run_in_executor.assert_awaited_once_with(None, discord_bot.find_auctions, 30.0, 12.0, 10)
+
+    async def test_auctions_uses_the_requested_page_limit(self):
+        _, loop = await self.run_auctions(discord_bot.SearchResult([make_auction_row(0)]), pages=3)
+        loop.run_in_executor.assert_awaited_once_with(None, discord_bot.find_auctions, 30.0, 12.0, 3)
+
+    async def test_auctions_warns_when_using_50_pages(self):
+        interaction, _ = await self.run_auctions([make_auction_row(0)], pages=50)
+        (embed,) = self.sent_embeds(interaction)
+        self.assertIn("up to 50 requests to CSFloat", embed.footer.text)
+
+    async def test_auctions_does_not_repeat_seen_listings_for_the_same_user(self):
+        state = {}
+        first, _ = await self.run_auctions([make_auction_row(0)], manual_seen=state)
+        self.assertIn("auction-0", state.get("123", {}))
+        second, _ = await self.run_auctions([make_auction_row(0)], manual_seen=state)
+
+        self.assertEqual(len(self.sent_embeds(first)), 1)
+        self.assertEqual(self.sent_embeds(second), [])
+        self.assertIn("already been shown to you", second.followup.send.await_args.args[0])
+
+    async def test_auctions_seen_history_is_isolated_per_user(self):
+        state = {"123": {"auction-0": NOW + timedelta(hours=1)}}
+        interaction, _ = await self.run_auctions(
+            [make_auction_row(0)], user_id=456, manual_seen=state
+        )
+
+        self.assertEqual(len(self.sent_embeds(interaction)), 1)
+        self.assertIn("456", state)
 
     async def test_auctions_has_no_scan_note_when_everything_was_scanned(self):
         interaction, _ = await self.run_auctions(discord_bot.SearchResult([make_auction_row(0)]))
@@ -611,7 +657,7 @@ class LongResultCommandTests(unittest.IsolatedAsyncioTestCase):
         interaction, _ = await self.run_auctions(discord_bot.SearchResult([], page_limit_hit=True))
         message = interaction.followup.send.await_args.args[0]
         self.assertIn("No listings found", message)
-        self.assertIn("200 auctions ending soonest", message)
+        self.assertIn("500 auctions ending soonest", message)
 
     async def test_deals_splits_long_results_into_several_messages(self):
         interaction = self.make_interaction()

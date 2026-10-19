@@ -43,6 +43,7 @@ ITEM_URL = "https://csfloat.com/item/{}"
 TOKEN = os.getenv("DISCORD_TOKEN")
 CSFLOAT_KEY = os.getenv("CSFLOAT_API_KEY")
 SEEN_AUCTIONS_FILE = Path(__file__).with_name("seen_auctions.json")
+SEEN_MANUAL_AUCTIONS_FILE = Path(__file__).with_name("seen_manual_auctions.json")
 
 
 def parse_float_setting(
@@ -189,6 +190,78 @@ def save_seen(seen, path=SEEN_AUCTIONS_FILE):
         raise RuntimeError(f"Could not save notification state {path}: {e}") from e
 
 
+def load_manual_seen(path=SEEN_MANUAL_AUCTIONS_FILE, now=None):
+    """Load unexpired manually displayed auctions, grouped by Discord user ID."""
+    path = Path(path)
+    now = now or datetime.now(UTC)
+    try:
+        with path.open(encoding="utf-8") as state_file:
+            payload = json.load(state_file)
+    except FileNotFoundError:
+        return {}
+    except (OSError, json.JSONDecodeError) as e:
+        raise RuntimeError(f"Could not read manual auction history {path}: {e}") from e
+
+    if not isinstance(payload, dict):
+        raise TypeError(f"Invalid manual auction history in {path}: expected a JSON object.")
+
+    seen_by_user = {}
+    for user_id, listings in payload.items():
+        if not isinstance(listings, dict):
+            logger.warning("Skipping invalid manual auction history for user %r in %s", user_id, path)
+            continue
+        active = {}
+        for listing_id, expiration in listings.items():
+            exp = parse_time(expiration) if isinstance(expiration, str) else None
+            if exp is None:
+                logger.warning(
+                    "Skipping invalid manual auction history for user %r, auction %r in %s",
+                    user_id,
+                    listing_id,
+                    path,
+                )
+                continue
+            if exp > now:
+                active[listing_id] = exp
+        if active:
+            seen_by_user[user_id] = active
+    return seen_by_user
+
+
+def save_manual_seen(seen_by_user, path=SEEN_MANUAL_AUCTIONS_FILE):
+    """Atomically save manually displayed auctions grouped by Discord user ID."""
+    path = Path(path)
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f"{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as state_file:
+            temp_path = Path(state_file.name)
+            json.dump(
+                {
+                    user_id: {
+                        listing_id: expiration.isoformat()
+                        for listing_id, expiration in listings.items()
+                    }
+                    for user_id, listings in seen_by_user.items()
+                },
+                state_file,
+                ensure_ascii=False,
+                indent=2,
+            )
+            state_file.write("\n")
+        os.replace(temp_path, path)
+    except (OSError, TypeError, ValueError) as e:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+        raise RuntimeError(f"Could not save manual auction history {path}: {e}") from e
+
+
 def make_session():
     session = requests.Session()
     session.headers["User-Agent"] = "csfloat-auctionradar-discord/1.0"
@@ -234,9 +307,7 @@ def ref_price(lot):
 
 
 AUCTIONS_PER_PAGE = 50
-AUCTION_PAGES_SHORT = 4  # Up to 200 auctions: enough for the default window.
-AUCTION_PAGES_LONG = 10  # Up to 500 auctions: for windows longer than a day.
-AUCTION_LONG_WINDOW_HOURS = 24
+AUCTION_PAGES_DEFAULT = 10
 
 
 class SearchResult(list):
@@ -247,11 +318,6 @@ class SearchResult(list):
         self.page_limit_hit = page_limit_hit
 
 
-def auction_pages(hours):
-    """Scan more pages for long windows: results are ordered by expiration time, so a long window needs more."""
-    return AUCTION_PAGES_LONG if hours > AUCTION_LONG_WINDOW_HOURS else AUCTION_PAGES_SHORT
-
-
 def scan_limit_note(pages):
     return (
         f"Only the {pages * AUCTIONS_PER_PAGE} auctions ending soonest were scanned; there may be unchecked "
@@ -259,7 +325,13 @@ def scan_limit_note(pages):
     )
 
 
-def find_auctions(max_price, hours, pages=AUCTION_PAGES_SHORT):
+MAX_PAGE_WARNING = (
+    "Warning: 50 pages can make up to 50 requests to CSFloat; "
+    "scanning may take longer or trigger rate limits."
+)
+
+
+def find_auctions(max_price, hours, pages=AUCTION_PAGES_DEFAULT):
     """Find auctions ending within `hours`, sorted by largest discount first.
 
     The result's `page_limit_hit` flag is True when more auctions existed than `pages` allowed us to read.
@@ -455,6 +527,7 @@ class RadarBot(discord.Client):
         super().__init__(intents=discord.Intents.default())
         self.tree = app_commands.CommandTree(self)
         self.seen = {}  # Listing ID -> expiration time for auctions already posted to the channel.
+        self.manual_seen = {}  # User ID -> {auction ID -> expiration time}.
 
     async def setup_hook(self):
         if GUILD_ID and GUILD_ID.isdigit():  # Commands appear immediately on a specific server.
@@ -463,6 +536,14 @@ class RadarBot(discord.Client):
             await self.tree.sync(guild=guild)
         else:
             await self.tree.sync()
+        try:
+            self.manual_seen = load_manual_seen()
+        except (RuntimeError, TypeError, ValueError) as e:
+            logger.warning(
+                "Could not load manual auction history; starting with an empty history: %s",
+                e,
+            )
+            self.manual_seen = {}
         if ALERT_CHANNEL_ID and ALERT_CHANNEL_ID.isdigit():
             try:
                 self.seen = load_seen()
@@ -486,6 +567,7 @@ client = RadarBot()
 @app_commands.describe(
     max_price="Maximum price in USD",
     hours="Ending within the next N hours",
+    pages="1–50 pages, 50 listings each; 50 pages can make up to 50 API requests",
     top="Number of listings to show",
     min_discount="Minimum discount in percent (negative values are allowed)",
 )
@@ -493,25 +575,56 @@ async def auctions(
     interaction: discord.Interaction,
     max_price: app_commands.Range[float, 1.0, 5000.0] = 30.0,
     hours: app_commands.Range[float, 0.1, 720.0] = 12.0,
+    pages: app_commands.Range[int, 1, 50] = AUCTION_PAGES_DEFAULT,
     top: app_commands.Range[int, 1, 30] = 30,
     min_discount: float = 0.0,
 ):
     await interaction.response.defer(thinking=True)  # The CSFloat request may take a few seconds.
-    pages = auction_pages(hours)
     try:
         found = await asyncio.get_running_loop().run_in_executor(None, find_auctions, max_price, hours, pages)
     except (CSFloatError, requests.RequestException) as e:
         logger.warning("CSFloat request failed for /auctions: %s", e)
         await interaction.followup.send(f"Could not retrieve CSFloat data: {e}")
         return
-    note = scan_limit_note(pages) if getattr(found, "page_limit_hit", False) else None
-    rows = [r for r in found if r["disc"] >= min_discount][:top]
+    notes = []
+    if getattr(found, "page_limit_hit", False):
+        notes.append(scan_limit_note(pages))
+    if pages == 50:
+        notes.append(MAX_PAGE_WARNING)
+    note = "\n".join(notes) or None
+    matching_rows = [r for r in found if r["disc"] >= min_discount]
+    user_id = str(interaction.user.id)
+    now = datetime.now(UTC)
+    active_seen = {
+        seen_user: active
+        for seen_user, listings in client.manual_seen.items()
+        if (active := {listing_id: exp for listing_id, exp in listings.items() if exp > now})
+    }
+    client.manual_seen.clear()
+    client.manual_seen.update(active_seen)
+    seen = client.manual_seen.setdefault(user_id, {})
+    rows = [r for r in matching_rows if r["id"] not in seen][:top]
     if not rows:
-        message = "No listings found. Try increasing max_price or hours, or lowering min_discount."
+        if matching_rows:
+            message = "All matching auctions found have already been shown to you. Try increasing hours or pages."
+        else:
+            message = "No listings found. Try increasing max_price or hours, or lowering min_discount."
         await interaction.followup.send(f"{message}\n{note}" if note else message)
         return
     title = f"Auction listings up to ${max_price:g}, ending within {hours:g}h"
     await send_embeds(interaction, build_embeds(rows, title, note))
+    seen.update({
+        row["id"]: row["exp"]
+        for row in rows
+        if isinstance(row.get("id"), str) and row.get("exp") is not None
+    })
+    try:
+        save_manual_seen(client.manual_seen)
+    except RuntimeError as e:
+        logger.warning("Could not save manual auction history: %s", e)
+        await interaction.followup.send(
+            f"Results were sent, but the manual auction history could not be saved: {e}"
+        )
 
 
 @client.tree.command(name="deals", description="CSFloat buy-now listings with good discounts")
