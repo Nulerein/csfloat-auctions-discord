@@ -308,6 +308,8 @@ def ref_price(lot):
 
 AUCTIONS_PER_PAGE = 50
 AUCTION_PAGES_DEFAULT = 10
+MAX_AUCTION_PAGES = 200
+HEAVY_SCAN_PAGES = 50  # From this many pages on, the reply warns that the scan makes many requests.
 
 
 class SearchResult(list):
@@ -325,10 +327,11 @@ def scan_limit_note(pages):
     )
 
 
-MAX_PAGE_WARNING = (
-    "Warning: 50 pages can make up to 50 requests to CSFloat; "
-    "scanning may take longer or trigger rate limits."
-)
+def heavy_scan_warning(pages):
+    return (
+        f"Warning: {pages} pages can make up to {pages} requests to CSFloat; "
+        "scanning may take longer or trigger rate limits."
+    )
 
 
 def find_auctions(max_price, hours, pages=AUCTION_PAGES_DEFAULT):
@@ -567,7 +570,7 @@ client = RadarBot()
 @app_commands.describe(
     max_price="Maximum price in USD",
     hours="Ending within the next N hours",
-    pages="1–50 pages, 50 listings each; 50 pages can make up to 50 API requests",
+    pages=f"1–{MAX_AUCTION_PAGES} pages, 50 listings each; {MAX_AUCTION_PAGES} pages can make up to {MAX_AUCTION_PAGES} API requests",
     top="Number of listings to show",
     min_discount="Minimum discount in percent (negative values are allowed)",
 )
@@ -575,7 +578,7 @@ async def auctions(
     interaction: discord.Interaction,
     max_price: app_commands.Range[float, 1.0, 5000.0] = 30.0,
     hours: app_commands.Range[float, 0.1, 720.0] = 12.0,
-    pages: app_commands.Range[int, 1, 50] = AUCTION_PAGES_DEFAULT,
+    pages: app_commands.Range[int, 1, MAX_AUCTION_PAGES] = AUCTION_PAGES_DEFAULT,
     top: app_commands.Range[int, 1, 30] = 30,
     min_discount: float = 0.0,
 ):
@@ -589,8 +592,8 @@ async def auctions(
     notes = []
     if getattr(found, "page_limit_hit", False):
         notes.append(scan_limit_note(pages))
-    if pages == 50:
-        notes.append(MAX_PAGE_WARNING)
+    if pages >= HEAVY_SCAN_PAGES:
+        notes.append(heavy_scan_warning(pages))
     note = "\n".join(notes) or None
     matching_rows = [r for r in found if r["disc"] >= min_discount]
     user_id = str(interaction.user.id)

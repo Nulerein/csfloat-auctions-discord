@@ -399,7 +399,7 @@ class SlashCommandTests(unittest.IsolatedAsyncioTestCase):
             {"max_price", "hours", "pages", "top", "min_discount"},
         )
         pages = next(parameter for parameter in auctions.parameters if parameter.name == "pages")
-        self.assertEqual((pages.min_value, pages.max_value, pages.default), (1, 50, 10))
+        self.assertEqual((pages.min_value, pages.max_value, pages.default), (1, 200, 10))
         self.assertEqual(
             {parameter.name for parameter in deals.parameters},
             {"max_price", "min_price", "min_discount", "top", "sort", "min_sales"},
@@ -572,6 +572,18 @@ class AuctionScanLimitTests(unittest.TestCase):
         self.assertEqual([row["id"] for row in result], ["lot-1"])
         self.assertFalse(result.page_limit_hit)
 
+    def test_scan_can_read_200_pages(self):
+        responses = [{"data": [self.lot(1)], "cursor": f"c{page}"} for page in range(200)]
+        with (
+            patch.object(discord_bot, "datetime", FrozenDateTime),
+            patch.object(discord_bot, "make_session"),
+            patch.object(discord_bot, "api_get", side_effect=responses) as api_get,
+        ):
+            result = discord_bot.find_auctions(30, 24, pages=200)
+        self.assertEqual(api_get.call_count, 200)
+        self.assertEqual(len(result), 200)
+        self.assertTrue(result.page_limit_hit)
+
 class LongResultCommandTests(unittest.IsolatedAsyncioTestCase):
     def make_interaction(self, user_id=123):
         return SimpleNamespace(
@@ -623,6 +635,17 @@ class LongResultCommandTests(unittest.IsolatedAsyncioTestCase):
         interaction, _ = await self.run_auctions([make_auction_row(0)], pages=50)
         (embed,) = self.sent_embeds(interaction)
         self.assertIn("up to 50 requests to CSFloat", embed.footer.text)
+
+    async def test_auctions_warns_with_the_actual_page_count_up_to_200(self):
+        interaction, loop = await self.run_auctions([make_auction_row(0)], pages=200)
+        loop.run_in_executor.assert_awaited_once_with(None, discord_bot.find_auctions, 30.0, 12.0, 200)
+        (embed,) = self.sent_embeds(interaction)
+        self.assertIn("up to 200 requests to CSFloat", embed.footer.text)
+
+    async def test_auctions_does_not_warn_below_50_pages(self):
+        interaction, _ = await self.run_auctions([make_auction_row(0)], pages=49)
+        (embed,) = self.sent_embeds(interaction)
+        self.assertIsNone(embed.footer.text)
 
     async def test_auctions_does_not_repeat_seen_listings_for_the_same_user(self):
         state = {}

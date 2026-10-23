@@ -103,7 +103,7 @@ Set command options directly in Discord.
 | --- | --- | --- |
 | `max_price` | `30` | Maximum price in USD (`1` to `5000`). |
 | `hours` | `12` | Show auctions ending within this many hours (`0.1` to `720`, up to 30 days). |
-| `pages` | `10` | Number of pages to scan (`1` to `50`; 50 auctions per page, up to 2,500). Higher values make more requests to CSFloat and may take longer or trigger rate limits. |
+| `pages` | `10` | Number of pages to scan (`1` to `200`; 50 auctions per page, up to 10,000). Higher values make more requests to CSFloat and may take longer or trigger rate limits; from `50` pages on, the reply includes a warning. |
 | `top` | `30` | Maximum number of results (`1` to `30`). Long lists are sent as several messages. |
 | `min_discount` | `0` | Minimum discount in percent; negative values are allowed. |
 
