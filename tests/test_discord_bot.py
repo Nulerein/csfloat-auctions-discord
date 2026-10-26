@@ -1,3 +1,5 @@
+import asyncio
+import copy
 import json
 import os
 import subprocess
@@ -669,6 +671,63 @@ class LongResultCommandTests(unittest.IsolatedAsyncioTestCase):
         embeds = self.sent_embeds(interaction)
         self.assertGreater(len(embeds), 1)
         self.assertEqual(sum(embed.description.count("/item/deal-") for embed in embeds), 30)
+
+
+class ConcurrentManualHistoryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_concurrent_auction_commands_keep_each_users_history(self):
+        future = datetime.now(UTC) + timedelta(hours=2)
+        rows = [{**make_auction_row(i), "exp": future} for i in (1, 2)]
+        first_is_sending = asyncio.Event()
+        release_first = asyncio.Event()
+
+        class FakeLoop:
+            def __init__(self, wait_for=None):
+                self.wait_for = wait_for
+
+            async def run_in_executor(self, *args):
+                if self.wait_for is not None:
+                    await self.wait_for.wait()
+                return list(rows)
+
+        loops = iter([FakeLoop(), FakeLoop(wait_for=first_is_sending)])
+
+        async def first_send(*args, **kwargs):
+            first_is_sending.set()
+            await release_first.wait()
+
+        async def second_send(*args, **kwargs):
+            release_first.set()
+
+        def make_interaction(user_id, send):
+            return SimpleNamespace(
+                user=SimpleNamespace(id=user_id),
+                response=SimpleNamespace(defer=AsyncMock()),
+                followup=SimpleNamespace(send=send),
+            )
+
+        saved = []
+        with (
+            patch.object(
+                discord_bot.asyncio, "get_running_loop", side_effect=lambda: next(loops)
+            ),
+            patch.object(
+                discord_bot,
+                "save_manual_seen",
+                side_effect=lambda state, *args, **kwargs: saved.append(copy.deepcopy(state)),
+            ),
+            patch.object(discord_bot.client, "manual_seen", {}),
+        ):
+            await asyncio.wait_for(
+                asyncio.gather(
+                    discord_bot.auctions.callback(make_interaction(1, first_send)),
+                    discord_bot.auctions.callback(make_interaction(2, second_send)),
+                ),
+                timeout=5,
+            )
+
+        self.assertEqual(sorted(saved[-1]), ["1", "2"])
+        self.assertEqual(sorted(saved[-1]["1"]), ["auction-1", "auction-2"])
+        self.assertEqual(sorted(saved[-1]["2"]), ["auction-1", "auction-2"])
 
 
 if __name__ == "__main__":

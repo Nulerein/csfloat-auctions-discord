@@ -613,7 +613,7 @@ async def auctions(
         return
     title = f"Auction listings up to ${max_price:g}, ending within {hours:g}h"
     await send_embeds(interaction, build_embeds(rows, title, note))
-    seen.update({
+    client.manual_seen.setdefault(user_id, {}).update({
         row["id"]: row["exp"]
         for row in rows
         if isinstance(row.get("id"), str) and row.get("exp") is not None
